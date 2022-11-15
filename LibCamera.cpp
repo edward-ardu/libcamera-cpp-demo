@@ -1,6 +1,8 @@
 #include "LibCamera.h"
 
-int LibCamera::initCamera(const StreamRoles &role, int width, int height, PixelFormat format, int buffercount, int rotation) {
+using namespace std::placeholders;
+
+int LibCamera::initCamera() {
     int ret;
     cm = std::make_unique<CameraManager>();
     ret = cm->start();
@@ -9,7 +11,7 @@ int LibCamera::initCamera(const StreamRoles &role, int width, int height, PixelF
               << ret << std::endl;
         return ret;
     }
-    std::string cameraId = cm->cameras()[0]->id();
+    cameraId = cm->cameras()[0]->id();
     camera_ = cm->get(cameraId);
     if (!camera_) {
         std::cerr << "Camera " << cameraId << " not found" << std::endl;
@@ -22,14 +24,23 @@ int LibCamera::initCamera(const StreamRoles &role, int width, int height, PixelF
         return 1;
     }
     camera_acquired_ = true;
+    return 0;
+}
 
-    std::unique_ptr<CameraConfiguration> config;
-    config = camera_->generateConfiguration(role);
-    libcamera::Size size(width, height);
-    config->at(0).pixelFormat = format;
-    config->at(0).size = size;
+char * LibCamera::getCameraId(){
+    return cameraId.data();
+}
+
+void LibCamera::configureStill(int width, int height, PixelFormat format, int buffercount, int rotation) {
+    printf("Configuring still capture...\n");
+    config_ = camera_->generateConfiguration({ StreamRole::StillCapture });
+    if (width && height) {
+        libcamera::Size size(width, height);
+        config_->at(0).size = size;
+    }
+    config_->at(0).pixelFormat = format;
     if (buffercount)
-        config->at(0).bufferCount = buffercount;
+        config_->at(0).bufferCount = buffercount;
     Transform transform = Transform::Identity;
     bool ok;
     Transform rot = transformFromRotation(rotation, &ok);
@@ -38,22 +49,15 @@ int LibCamera::initCamera(const StreamRoles &role, int width, int height, PixelF
     transform = rot * transform;
     if (!!(transform & Transform::Transpose))
         throw std::runtime_error("transforms requiring transpose not supported");
-    config->transform = transform;
+    config_->transform = transform;
 
-    switch (config->validate()) {
-        case CameraConfiguration::Valid:
-            break;
+    CameraConfiguration::Status validation = config_->validate();
+	if (validation == CameraConfiguration::Invalid)
+		throw std::runtime_error("failed to valid stream configurations");
+	else if (validation == CameraConfiguration::Adjusted)
+        std::cout << "Stream configuration adjusted" << std::endl;
 
-        case CameraConfiguration::Adjusted:
-            std::cout << "Camera configuration adjusted" << std::endl;
-            break;
-
-        case CameraConfiguration::Invalid:
-            std::cout << "Camera configuration invalid" << std::endl;
-            return 1;
-    }
-    config_ = std::move(config);
-    return 0;
+    printf("Still capture setup complete\n");
 }
 
 int LibCamera::startCamera() {
@@ -131,7 +135,25 @@ int LibCamera::startCapture() {
             return ret;
         }
     }
+    viewfinder_stream_ = config_->at(0).stream();
     return 0;
+}
+
+void LibCamera::StreamDimensions(Stream const *stream, uint32_t *w, uint32_t *h, uint32_t *stride) const
+{
+	StreamConfiguration const &cfg = stream->configuration();
+	if (w)
+		*w = cfg.size.width;
+	if (h)
+		*h = cfg.size.height;
+	if (stride)
+		*stride = cfg.stride;
+}
+
+Stream *LibCamera::VideoStream(uint32_t *w, uint32_t *h, uint32_t *stride) const
+{
+	StreamDimensions(viewfinder_stream_, w, h, stride);
+	return viewfinder_stream_;
 }
 
 int LibCamera::queueRequest(Request *request) {
@@ -152,7 +174,6 @@ void LibCamera::requestComplete(Request *request) {
 }
 
 void LibCamera::processRequest(Request *request) {
-    std::lock_guard<std::mutex> lock(free_requests_mutex_);
     requestQueue.push(request);
 }
 
@@ -165,6 +186,7 @@ void LibCamera::returnFrameBuffer(LibcameraOutData frameData) {
 
 bool LibCamera::readFrame(LibcameraOutData *frameData){
     std::lock_guard<std::mutex> lock(free_requests_mutex_);
+    // int w, h, stride;
     if (!requestQueue.empty()){
         Request *request = this->requestQueue.front();
 
@@ -176,7 +198,7 @@ bool LibCamera::readFrame(LibcameraOutData *frameData){
                 const FrameMetadata::Plane &meta = buffer->metadata().planes()[i];
                 
                 void *data = mappedBuffers_[plane.fd.get()].first;
-                unsigned int length = std::min(meta.bytesused, plane.length);
+                int length = std::min(meta.bytesused, plane.length);
 
                 frameData->size = length;
                 frameData->imageData = (uint8_t *)data;
@@ -193,7 +215,14 @@ bool LibCamera::readFrame(LibcameraOutData *frameData){
 }
 
 void LibCamera::set(ControlList controls){
+    std::lock_guard<std::mutex> lock(control_mutex_);
 	this->controls_ = std::move(controls);
+}
+
+int LibCamera::resetCamera(int width, int height, PixelFormat format, int buffercount, int rotation) {
+    stopCamera();
+    configureStill(width, height, format, buffercount, rotation);
+    return startCamera();
 }
 
 void LibCamera::stopCamera() {
@@ -206,15 +235,18 @@ void LibCamera::stopCamera() {
                 camera_started_ = false;
             }
         }
-        if (camera_started_){
-            if (camera_->stop())
-                throw std::runtime_error("failed to stop camera");
-            camera_started_ = false;
-        }
         camera_->requestCompleted.disconnect(this, &LibCamera::requestComplete);
     }
     while (!requestQueue.empty())
         requestQueue.pop();
+
+    for (auto &iter : mappedBuffers_)
+	{
+        std::pair<void *, unsigned int> pair_ = iter.second;
+		munmap(std::get<0>(pair_), std::get<1>(pair_));
+	}
+
+    mappedBuffers_.clear();
 
     requests_.clear();
 

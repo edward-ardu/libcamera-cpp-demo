@@ -40,20 +40,27 @@ class LibCamera {
         LibCamera(){};
         ~LibCamera(){};
         
-        int initCamera(const StreamRoles &role, int width, int height, PixelFormat format, int buffercount, int rotation);
-        
+        int initCamera();
+        void configureStill(int width, int height, PixelFormat format, int buffercount, int rotation);
         int startCamera();
+        int resetCamera(int width, int height, PixelFormat format, int buffercount, int rotation);
         bool readFrame(LibcameraOutData *frameData);
         void returnFrameBuffer(LibcameraOutData frameData);
 
         void set(ControlList controls);
         void stopCamera();
         void closeCamera();
+
+        Stream *VideoStream(uint32_t *w, uint32_t *h, uint32_t *stride) const;
+        char * getCameraId();
+
     private:
         int startCapture();
         int queueRequest(Request *request);
         void requestComplete(Request *request);
         void processRequest(Request *request);
+
+        void StreamDimensions(Stream const *stream, uint32_t *w, uint32_t *h, uint32_t *stride) const;
 
         unsigned int cameraIndex_;
 	    uint64_t last_;
@@ -73,4 +80,7 @@ class LibCamera {
         std::mutex control_mutex_;
         std::mutex camera_stop_mutex_;
         std::mutex free_requests_mutex_;
+
+        Stream *viewfinder_stream_ = nullptr;
+        std::string cameraId;
 };
