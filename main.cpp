@@ -13,8 +13,8 @@ int main() {
     float lens_position = 100;
     float focus_step = 50;
     LibCamera cam;
-    uint32_t width = 1280;
-    uint32_t height = 720;
+    uint32_t width = 2312;
+    uint32_t height = 1736;
     uint32_t stride;
     char key;
     int ret = cam.initCamera();
@@ -34,11 +34,12 @@ int main() {
         bool flag;
         LibcameraOutData frameData;
         cam.startCamera();
+        cam.VideoStream(&width, &height, &stride);
         while (true) {
             flag = cam.readFrame(&frameData);
             if (!flag)
                 continue;
-            Mat im(height, width, CV_8UC3, frameData.imageData);
+            Mat im(height, width, CV_8UC3, frameData.imageData, stride);
 
             imshow("libcamera-demo", im);
             key = waitKey(1);
