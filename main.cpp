@@ -13,14 +13,23 @@ int main() {
     float lens_position = 100;
     float focus_step = 50;
     LibCamera cam;
-    uint32_t width = 2312;
-    uint32_t height = 1736;
+    uint32_t width = 1920;
+    uint32_t height = 1080;
     uint32_t stride;
     char key;
+    int window_width = 1920;
+    int window_height = 1080;
+
+    if (width > window_width)
+    {
+        cv::namedWindow("libcamera-demo", cv::WINDOW_NORMAL);
+        cv::resizeWindow("libcamera-demo", window_width, window_height);
+    } 
+
     int ret = cam.initCamera();
-    cam.configureStill(width, height, formats::RGB888, 4, 0);
+    cam.configureStill(width, height, formats::RGB888, 1, 0);
     ControlList controls_;
-    int64_t frame_time = 1000000 / 30;
+    int64_t frame_time = 1000000 / 10;
     // Set frame rate
 	controls_.set(controls::FrameDurationLimits, libcamera::Span<const int64_t, 2>({ frame_time, frame_time }));
     // Adjust the brightness of the output images, in the range -1.0 to 1.0
